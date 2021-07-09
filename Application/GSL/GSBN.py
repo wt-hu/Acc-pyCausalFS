@@ -1,0 +1,166 @@
+#!/usr/bin/env python
+# encoding: utf-8
+"""
+ @Time    : 2020/7/30 8:55
+ @File    : GSBN.py
+ """
+import numpy as np
+from Application.MBs.common.subsets import subsets
+from Application.MBs.common.Meek import meek
+from Application.MBs.common.condition_independence_test import CCT_select
+
+def GSMB(data, target, alaph, is_discrete, dict_cache):
+    number, kVar = np.shape(data)
+    CMB = []
+    ci_number = 0
+    circulateFlag = True
+    S_variables = [i for i in range(kVar) if i !=target]
+
+    """grow phase"""
+    # print("grow phase")
+    while circulateFlag:
+        circulateFlag = False
+        for x in S_variables:
+            ci_number += 1
+            pval_gp, dep_gp, dict_cache = CCT_select(data, target, x, CMB, is_discrete, dict_cache)
+            if pval_gp < alaph:
+                # print("CMB append is: "+str(x))
+                CMB.append(x)
+                circulateFlag = True
+                break
+        S_variables = [i for i in range(kVar) if i != target and i not in CMB]
+
+    """"shrink phase"""
+    # print("shrink phase")
+    circulateFlag = True
+    while circulateFlag:
+        circulateFlag = False
+        CMB_temp = CMB.copy()
+        for x in CMB_temp:
+            subsets_CMB = [i for i in CMB if i != x]
+            ci_number += 1
+            pval_sp, dep_sp, dict_cache = CCT_select(data, target, x, subsets_CMB, is_discrete, dict_cache)
+            if pval_sp > alaph :
+                # print("CMB remove is: "+ str(x))
+                CMB.remove(x)
+                circulateFlag = True
+                break
+
+    return list(set(CMB)), ci_number, dict_cache
+
+
+def GSBN(data, alpha, is_discrete, dict_cache):
+    _, kvar = np.shape(data)
+    max_k = 3
+    all_MB = [[] for i in range(kvar)]
+    all_neighbor = [[] for i in range(kvar)]
+    PP = np.zeros((kvar, kvar))
+    # Compute Markov Blankets
+
+
+    for i in range(kvar):
+        MB, _, dict_cache = GSMB(data, i, alpha, is_discrete, dict_cache)
+        for j in MB:
+            PP[i, j] = 1
+
+
+    # # AND Rule
+    # for i in range(kvar):
+    #     for j in range(0, i):
+    #         if DAG[i, j] != DAG[j, i]:
+    #             DAG[i, j] = 0
+    #             DAG[j, i] = 0
+
+    for i in range(kvar):
+        for j in range(0, i):
+            if PP[i, j] != PP[j, i]:
+                PP[i, j] = 1
+                PP[j, i] = 1
+
+    for i in range(kvar):
+        for j in range(kvar):
+            if PP[i, j] == 1:
+                all_MB[i].append(j)
+
+    print(all_MB)
+    # removes the possible spouse links between linked variables X and Y
+    for x in range(kvar):
+        for y in all_MB[x]:
+            vs = set(all_MB[x]).union(set(all_MB[y]))
+            varis = list((set(all_MB[x]).difference([y])).union(set(all_MB[y]).difference([x])))
+            k = 0
+            break_flag = False
+            while len(varis) > k and k <= max_k:
+                ss = subsets(varis, k)
+                for s in ss:
+                    pval, _, dict_cache = CCT_select(data, x, y, s, is_discrete, dict_cache)
+                    if pval > alpha:
+                        PP[x, y] = 0
+                        PP[x, y] = 0
+                        break_flag = True
+                        break
+                if break_flag:
+                    break
+                k += 1
+
+
+    for i in range(kvar):
+        for j in range(kvar):
+            if PP[i, j] == 1:
+                all_neighbor[i].append(j)
+
+    DAG = PP.copy()
+    pdag = PP.copy()
+    G = PP.copy()
+
+    # orient edges
+    for x in range(kvar):
+        for y in all_neighbor[x]:
+            sz = list((set(all_neighbor[x]).difference(all_neighbor[y])).difference([y]))
+            for z in sz:
+                PP[y, x] = -1
+                B = list((set(all_MB[y]).difference([z])).union(set(all_MB[z]).difference([y])))
+                break_flag = False
+                cutSetSize = 0
+                while len(B) >= cutSetSize and cutSetSize == 0:
+                    SS = subsets(B, cutSetSize)
+                    for s in SS:
+                        cond_s = list(set(s).union([x]))
+                        pval, _, dict_cache = CCT_select(
+                            data, y, z, cond_s, is_discrete, dict_cache)
+                        if pval > alpha:
+                            PP[y, x] = 1
+                            break_flag = True
+                            break
+                    if break_flag:
+                        break
+                    cutSetSize += 1
+            if PP[y, x] == -1:
+                pdag[y, x] = -1
+                pdag[x, y] = 0
+                G[y, x] = 1
+                G[x, y] = 0
+                break
+
+    DAG, pdag, G = meek(DAG, pdag, G, kvar)
+
+    return pdag, dict_cache
+
+
+
+# import warnings
+# warnings.filterwarnings('ignore')
+# import pandas as pd
+# data = pd.read_csv("D:/data/Alarm_data/Alarm1_s5000_v7.csv")
+# print("the file read")
+# import numpy as np
+# num1, kvar = np.shape(data)
+# alpha = 0.01
+#
+# pdag, dic = GSBN(data, alpha, True)
+# print(pdag)
+# for i in range(kvar):
+#     for j in range(kvar):
+#         if pdag[i, j] == -1:
+#             print("i: ", i, " ,j: ", j)
+# print(dic["cache"][0]/(dic["cache"][0]+dic["cache"][1]))
